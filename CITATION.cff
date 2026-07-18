@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use ÁBACO or its measurements, please cite it as below."
+title: "ÁBACO: A Benchmark Suite for the ÁGORA Verifiable-Voting Cryptographic Core"
+abstract: >-
+  ÁBACO measures the computational cost of the cryptographic core of verifiable
+  electronic voting — homomorphic exponential ElGamal, CDS OR-proofs and
+  Chaum-Pedersen 1-of-C ballot-validity proofs (Fiat-Shamir), an RFC 6962 Merkle
+  transparency log, and Shamir threshold decryption — across election scales from
+  one thousand to ten million votes, with per-operation breakdown, statistical
+  rigor and reproducible, citable output.
+type: software
+authors:
+  - family-names: Cabrera
+    given-names: Felipe
+    affiliation: "Universidad Católica del Uruguay"
+  - family-names: Francolino
+    given-names: Stefano
+    affiliation: "Universidad Católica del Uruguay"
+  - family-names: Vázquez
+    given-names: Lucía
+    affiliation: "Universidad Católica del Uruguay"
+license: Apache-2.0
+repository-code: "https://github.com/felicabrera/abaco"
+keywords:
+  - cryptography
+  - elgamal
+  - homomorphic-encryption
+  - zero-knowledge-proofs
+  - schnorr
+  - merkle-tree
+  - transparency-log
+  - e-voting
+  - benchmark
+  - verifiable-elections
+version: "0.1.0"
+date-released: "2026-07-18"
