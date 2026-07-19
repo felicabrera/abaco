@@ -14,7 +14,11 @@ import (
 
 // SchemaVersion is the version of the JSON result schema. Bump on any
 // breaking change to the shape below.
-const SchemaVersion = 1
+//
+// v2 adds the top-level "proof_scales" section (audit inclusion/consistency
+// proof timings and sizes). It is purely additive: v1 consumers ignore the new
+// field, and it is omitted entirely when no proof scales are measured.
+const SchemaVersion = 2
 
 // Report is the top-level result document.
 type Report struct {
@@ -25,6 +29,32 @@ type Report struct {
 	Params                  Params        `json:"params"`
 	InstrumentOverheadNanos float64       `json:"instrument_overhead_nanos"`
 	Scales                  []ScaleResult `json:"scales"`
+	ProofScales             []ProofResult `json:"proof_scales,omitempty"`
+}
+
+// ProofResult holds the audit-proof measurements for one log size. Proofs
+// (inclusion and consistency) are FARO's core auditing feature but are off the
+// election hot path, so they are measured in a separate phase at their own
+// scales and reported here rather than in the pipeline breakdown.
+type ProofResult struct {
+	TreeSize        int         `json:"tree_size"`
+	Samples         int         `json:"samples"` // random leaves/splits sampled
+	Ops             []OpSummary `json:"ops"`     // the four proof-op latency summaries
+	InclusionSize   ProofSize   `json:"inclusion_size"`
+	ConsistencySize ProofSize   `json:"consistency_size"`
+}
+
+// ProofSize records how large a proof is — the headline alongside verify time,
+// since proofs are downloaded and checked on the verifier's own machine. Hashes
+// is a representative path length; Min/Max bound it across the sampled
+// leaves/splits. Bytes is Hashes*32. Log2N is ceil(log2 TreeSize), the O(log n)
+// reference the measured sizes should track.
+type ProofSize struct {
+	Hashes    int     `json:"hashes"`
+	MinHashes int     `json:"min_hashes"`
+	MaxHashes int     `json:"max_hashes"`
+	Bytes     int     `json:"bytes"`
+	Log2N     float64 `json:"log2_n"`
 }
 
 // Environment captures where a run happened, for citation and reproducibility.

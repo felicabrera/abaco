@@ -42,6 +42,8 @@ El pipeline criptográfico completo de una elección, operación por operación:
 | 9 | Combinación de Lagrange | `internal/threshold` |
 | 10 | BSGS: recuperar el conteo | `internal/bench` |
 
+Y, fuera del camino caliente, las dos pruebas de auditoría de FARO — **inclusion proof** y **consistency proof** (generación y verificación, más el tamaño de la prueba) — medidas en escalas propias vía `--proof-votes` (`internal/merkle`).
+
 ## Quickstart
 
 Requiere **Go 1.23+**.
@@ -55,6 +57,10 @@ $ ./abaco demo --seed 42
 
 # El benchmark principal:
 $ ./abaco bench --votes 1000,10000,100000 --repeat 3 --seed 42
+
+# Con las pruebas de auditoría (inclusion + consistency) en escalas propias:
+$ ./abaco bench --votes 1000,10000,100000 \
+    --proof-votes 1000,100000,1000000 --proof-samples 256 --seed 42
 
 # El entorno detectado (para pegar en un informe):
 $ ./abaco env
@@ -94,6 +100,30 @@ Lagrange combine     6        204.27 µs  204.06 µs  207.68 µs  1.22 ms    0.0
 BSGS recover tally   6        3.73 ms    3.73 ms    3.75 ms    22.38 ms   0.0%
 ```
 
+Y las pruebas de auditoría (`--proof-votes 1000,100000,1000000 --proof-samples 128`), medidas aparte porque no están en el camino caliente:
+
+```
+Table 2 — Audit proofs @ 1,000 entries
+Operation           Calls  Median   Mean     p95      Total CPU
+Inclusion prove     128    917 ns   969 ns   1.62 µs  124.05 µs
+Inclusion verify    128    1.46 µs  1.48 µs  1.54 µs  189.00 µs
+Consistency prove   128    917 ns   1.04 µs  1.69 µs  132.79 µs
+Consistency verify  128    1.92 µs  1.92 µs  2.44 µs  246.16 µs
+  Inclusion proof:   10 hashes / 320 B   (log2 n = 10.0)
+  Consistency proof: 11 hashes / 352 B (4–11 across samples)   (log2 n = 10.0)
+
+Table 2 — Audit proofs @ 1,000,000 entries
+Operation           Calls  Median   Mean     p95      Total CPU
+Inclusion prove     128    1.38 µs  1.50 µs  1.90 µs  191.93 µs
+Inclusion verify    128    2.33 µs  2.52 µs  3.93 µs  322.38 µs
+Consistency prove   128    1.08 µs  1.32 µs  3.78 µs  169.45 µs
+Consistency verify  128    2.94 µs  2.95 µs  3.46 µs  378.08 µs
+  Inclusion proof:   20 hashes / 640 B   (log2 n = 20.0)
+  Consistency proof: 21 hashes / 672 B (16–21 across samples)   (log2 n = 20.0)
+```
+
+El log crece 1.000×, pero la prueba de inclusión pasa de 10 a 20 hashes (320 → 640 B) y la verificación de ~1,5 a ~2,3 µs: **`O(log n)`, no `O(n)`.** Ese es el argumento de FARO — auditar es barato para cualquiera, en hardware común.
+
 ### Cómo leer estos números
 
 - **La memoria es plana.** El pico de heap pasa de 4.6 a 8.9 MiB mientras los votos van de 1.000 a 100.000 — dos órdenes de magnitud más votos, memoria casi constante. Es el resultado más valioso del proyecto (ver [Arquitectura](#arquitectura-por-qué-la-memoria-es-plana)).
@@ -118,7 +148,12 @@ Todo esto es criptografía estándar y documentada; ÁBACO no inventa variantes.
 
 **Recuperación del conteo (BSGS).** El total está en `[0, N]`; baby-step/giant-step lo recupera en `O(√N)`. Para 10M votos, ~3.163 entradas. Se mide por separado del descifrado parcial.
 
-**Merkle (RFC 6962).** `leaf = SHA-256(0x00 ‖ entry)`, `node = SHA-256(0x01 ‖ left ‖ right)`. Los prefijos de dominio previenen ataques de segunda preimagen. El árbol es **incremental/streaming** (una pila de raíces de subárboles, memoria `O(log n)`). Se implementan y miden también inclusion proofs y consistency proofs — la funcionalidad central de FARO.
+**Merkle (RFC 6962).** `leaf = SHA-256(0x00 ‖ entry)`, `node = SHA-256(0x01 ‖ left ‖ right)`. Los prefijos de dominio previenen ataques de segunda preimagen. El árbol es **incremental/streaming** (una pila de raíces de subárboles, memoria `O(log n)`). Además se **miden** las dos pruebas que hacen auditable al log — la funcionalidad central de FARO:
+
+- **Inclusion proof** (audit path): prueba que una papeleta cifrada está en el log con raíz `R`, sin revelar el resto. Son ~log₂(n) hashes hermanos; el verificador recomputa la raíz. Es lo que permite a un votante confirmar "mi voto quedó registrado".
+- **Consistency proof**: prueba que el log es *append-only* — que un árbol anterior (tamaño `m`) es prefijo de uno posterior (tamaño `n`), sin reordenar, editar ni borrar. Es lo que permite a un auditor confirmar "el log no fue manipulado".
+
+Ambas se generan desde un árbol almacenado en `O(log n)` (como lo haría un servidor de log real; validado por igualdad byte a byte contra la implementación de referencia `O(n)` y contra los vectores conocidos de Certificate Transparency). El resultado clave es que **el tamaño de la prueba y el costo de verificación crecen con `log n`, no con `n`**: auditar un log de un millón de entradas cuesta el mismo puñado de hashes que uno de mil. Se miden con `--proof-votes` (escalas independientes de `--votes`, para no romper la memoria plana del pipeline) y `--proof-samples`.
 
 ## Arquitectura: por qué la memoria es plana
 

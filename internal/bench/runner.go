@@ -27,6 +27,10 @@ type Config struct {
 	Seed          uint64
 	Verbose       bool
 	Progress      io.Writer // where to draw the live progress line; nil = silent
+
+	// Audit-proof measurement (off the hot path, so scaled independently of Votes).
+	ProofVotes   []int // tree sizes at which to measure inclusion/consistency proofs
+	ProofSamples int   // random leaves/splits sampled per proof scale
 }
 
 // Run executes the whole benchmark and returns a populated report.
@@ -89,6 +93,15 @@ func Run(cfg Config) (*report.Report, error) {
 			return nil, err
 		}
 		rep.Scales = append(rep.Scales, sr)
+	}
+
+	// Audit proofs: inclusion and consistency, measured at their own scales.
+	for _, n := range cfg.ProofVotes {
+		pr, err := measureProofs(n, cfg.ProofSamples, int64(cfg.Seed))
+		if err != nil {
+			return nil, err
+		}
+		rep.ProofScales = append(rep.ProofScales, pr)
 	}
 	return rep, nil
 }

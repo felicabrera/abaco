@@ -30,6 +30,36 @@ func parseIntList(s string) ([]int, error) {
 	return out, nil
 }
 
+// parseProofVotes resolves the --proof-votes flag: empty means "mirror the
+// --votes scales", the literal "none"/"off" disables proof measurement, and
+// anything else is a comma-separated list of tree sizes (>= 2). Sizes below 2
+// are rejected because a consistency proof needs 0 < m < n.
+func parseProofVotes(s string, votes []int) ([]int, error) {
+	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "":
+		out := make([]int, 0, len(votes))
+		for _, v := range votes {
+			if v >= 2 {
+				out = append(out, v)
+			}
+		}
+		return out, nil
+	case "none", "off":
+		return nil, nil
+	}
+	list, err := parseIntList(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range list {
+		if v < 2 {
+			return nil, fmt.Errorf("proof scale must be >= 2, got %d", v)
+		}
+	}
+	return list, nil
+}
+
 // parseSize parses a byte size with an optional unit. Both IEC/binary (KiB, MiB,
 // GiB) and SI/decimal (KB, MB, GB) suffixes are accepted, as is a bare byte
 // count. Returns (bytes, canonicalLabel).

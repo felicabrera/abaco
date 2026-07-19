@@ -25,11 +25,17 @@ func runBench(args []string) {
 	csvPath := fs.String("csv", "", "write per-operation results to this CSV file")
 	batch := fs.Int("batch", 1000, "pipeline batch size")
 	verbose := fs.Bool("verbose", false, "show live progress")
+	proofVotes := fs.String("proof-votes", "", "tree sizes to measure inclusion/consistency proofs at (default: same as --votes; \"none\" to skip)")
+	proofSamples := fs.Int("proof-samples", 256, "random leaves/splits sampled per proof scale")
 	fs.Parse(args)
 
 	votesList, err := parseIntList(*votes)
 	if err != nil {
 		fatalf("--votes: %v", err)
+	}
+	proofVotesList, err := parseProofVotes(*proofVotes, votesList)
+	if err != nil {
+		fatalf("--proof-votes: %v", err)
 	}
 	memBytes, memLabel, err := parseSize(*mem)
 	if err != nil {
@@ -58,6 +64,8 @@ func runBench(args []string) {
 		Batch:         *batch,
 		Seed:          seed,
 		Verbose:       *verbose,
+		ProofVotes:    proofVotesList,
+		ProofSamples:  *proofSamples,
 	}
 	if progress != nil {
 		cfg.Progress = progress
@@ -72,6 +80,7 @@ func runBench(args []string) {
 	report.RenderEnvironment(os.Stdout, rep)
 	report.RenderScaleTable(os.Stdout, rep)
 	report.RenderOpTables(os.Stdout, rep)
+	report.RenderProofTables(os.Stdout, rep)
 
 	if *jsonPath != "" {
 		if err := report.WriteJSON(*jsonPath, rep); err != nil {
