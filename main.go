@@ -3,11 +3,12 @@
 // an RFC 6962 Merkle transparency log, and Shamir threshold decryption —
 // measured at real election scale.
 //
-// It has three subcommands:
+// It has four subcommands:
 //
-//	abaco demo    a step-by-step, human-readable walkthrough of one ballot
-//	abaco bench   the measured pipeline across one or more vote scales
-//	abaco env     the detected host environment, for citation
+//	abaco demo      a step-by-step, human-readable walkthrough of one ballot
+//	abaco bench     the measured pipeline across one or more vote scales
+//	abaco benchdiff the commit-to-commit change between two bench --json runs
+//	abaco env       the detected host environment, for citation
 //
 // ÁBACO is a measurement instrument, not a voting system. See the README for its
 // non-goals and the methodology behind the numbers.
@@ -28,6 +29,8 @@ func main() {
 		runDemo(os.Args[2:])
 	case "bench":
 		runBench(os.Args[2:])
+	case "benchdiff":
+		runBenchDiff(os.Args[2:])
 	case "env":
 		runEnv(os.Args[2:])
 	case "-h", "--help", "help":
@@ -46,9 +49,10 @@ Usage:
   abaco <command> [flags]
 
 Commands:
-  demo    Walk through the full cryptographic pipeline for a single ballot.
-  bench   Run and measure the pipeline across vote scales.
-  env     Print the detected host environment (for citation).
+  demo      Walk through the full cryptographic pipeline for a single ballot.
+  bench     Run and measure the pipeline across vote scales.
+  benchdiff Diff two bench --json runs and print a markdown summary.
+  env       Print the detected host environment (for citation).
 
 Run "abaco <command> -h" for the flags of each command.
 `)

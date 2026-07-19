@@ -1,0 +1,163 @@
+name: Benchmark
+
+# Tracked, reproducible performance time series for ÁBACO.
+#
+# Every push to main runs the crypto pipeline and the audit proofs at fixed
+# scales with a fixed seed, uploads the JSON keyed by commit SHA, prints the
+# human-readable tables to the job log, and posts a commit-to-commit diff of the
+# headline medians to the job summary.
+#
+# Runner note: this uses a GitHub-hosted runner, so absolute numbers are noisy
+# and vary between jobs. Only large relative deltas are trustworthy. For citable
+# absolute numbers, run on fixed hardware (see the README methodology).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      fail_on_regression:
+        description: "Fail the job if a tracked median regresses past the threshold (default: off)."
+        type: boolean
+        default: false
+
+# The baseline branch is updated after each run; serialize runs on the same ref
+# so two jobs never race to commit the baseline.
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+# Needed to push the updated numbers to the bench-baseline branch.
+permissions:
+  contents: write
+
+env:
+  # Use exactly the toolchain set up below; never auto-download a newer one, so a
+  # Go upgrade can't masquerade as a performance change.
+  GOTOOLCHAIN: local
+  REGRESSION_THRESHOLD: "10"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # Full .git is left in place so the Go toolchain can stamp vcs.revision
+        # into the binary (that's how the JSON environment block records commit).
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pinned exactly (not "1.23") so a Go patch bump is a deliberate edit,
+          # not silent perf drift. Bump intentionally when you mean to.
+          go-version: "1.23.4"
+          check-latest: false
+          # setup-go's built-in module/build cache is left on to keep jobs fast.
+
+      - name: Build (VCS-stamped)
+        # `go build .` (not ./...) builds the main package so the commit is stamped.
+        run: go build -o abaco .
+
+      - name: Fetch previous baseline
+        # The last run's JSON lives on the bench-baseline branch. Absent on the
+        # very first run — that's fine; benchdiff treats a missing file as "no
+        # baseline yet".
+        run: |
+          if git fetch --quiet origin bench-baseline 2>/dev/null; then
+            git show origin/bench-baseline:pipeline.json > baseline-pipeline.json 2>/dev/null || rm -f baseline-pipeline.json
+            git show origin/bench-baseline:proofs.json   > baseline-proofs.json   2>/dev/null || rm -f baseline-proofs.json
+            echo "Fetched baseline from bench-baseline."
+          else
+            echo "No bench-baseline branch yet — this is the first tracked run."
+          fi
+
+      - name: Run 1 — pipeline benchmark (proofs disabled)
+        # --proof-votes none keeps this a pure pipeline run: the O(n) proof phase
+        # would otherwise mirror --votes and contaminate the flat-memory numbers.
+        # Tables print to the job log; full results go to pipeline.json.
+        run: |
+          ./abaco bench \
+            --votes 1000,10000,100000,1000000 \
+            --repeat 3 --seed 42 \
+            --proof-votes none \
+            --json pipeline.json
+
+      - name: Run 2 — audit proofs benchmark (separate invocation)
+        # Tiny --votes 1000 just satisfies the pipeline step cheaply; the subject
+        # is the --proof-votes scales.
+        run: |
+          ./abaco bench \
+            --votes 1000 \
+            --proof-votes 1000,10000,100000,1000000 \
+            --proof-samples 256 \
+            --repeat 3 --seed 42 \
+            --json proofs.json
+
+      - name: Commit-to-commit diff → job summary
+        # Never fails here — the summary must always render. Enforcement (below)
+        # is a separate, opt-in step.
+        run: |
+          {
+            echo "## Benchmark diff vs. previous \`main\` commit"
+            echo
+            echo "Commit \`${GITHUB_SHA}\` · seed 42 · runner \`${{ runner.os }}\` (GitHub-hosted — absolute numbers are noisy; trust large relative deltas)."
+            echo
+            echo "### Pipeline (ballot path)"
+            echo
+            ./abaco benchdiff --old baseline-pipeline.json --new pipeline.json --threshold "${REGRESSION_THRESHOLD}"
+            echo
+            echo "### Audit proofs (inclusion / consistency)"
+            echo
+            ./abaco benchdiff --old baseline-proofs.json --new proofs.json --threshold "${REGRESSION_THRESHOLD}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark JSON
+        # Always upload, keyed by commit SHA, even if a later step fails.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.sha }}
+          path: |
+            pipeline.json
+            proofs.json
+          if-no-files-found: warn
+
+      - name: Update baseline branch
+        # Only on real pushes to main. Manual (workflow_dispatch) runs never move
+        # the baseline, so experiments don't pollute the time series.
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          work="$(mktemp -d)"
+          if git ls-remote --exit-code --heads "$remote" bench-baseline >/dev/null 2>&1; then
+            # Append to the existing history so the baseline branch is a durable log.
+            git clone --quiet --branch bench-baseline --single-branch "$remote" "$work"
+          else
+            # First run: create an orphan branch containing only the result JSON.
+            git clone --quiet --depth 1 "$remote" "$work"
+            git -C "$work" checkout --quiet --orphan bench-baseline
+            git -C "$work" rm -rqf . || true
+          fi
+          cp pipeline.json proofs.json "$work/"
+          git -C "$work" add pipeline.json proofs.json
+          if git -C "$work" diff --cached --quiet; then
+            echo "Baseline unchanged; nothing to commit."
+          else
+            git -C "$work" commit --quiet -m "bench baseline @ ${GITHUB_SHA} [skip ci]"
+            git -C "$work" push --quiet origin bench-baseline
+            echo "Updated bench-baseline."
+          fi
+
+      - name: Enforce regression threshold (opt-in)
+        # Off by default so perf noise never blocks main. Turn on per-run via the
+        # workflow_dispatch input; wire into push events later if desired.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.fail_on_regression }}
+        run: |
+          ./abaco benchdiff --old baseline-pipeline.json --new pipeline.json --threshold "${REGRESSION_THRESHOLD}" --fail-on-regression >/dev/null
+          ./abaco benchdiff --old baseline-proofs.json   --new proofs.json   --threshold "${REGRESSION_THRESHOLD}" --fail-on-regression >/dev/null
