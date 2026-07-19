@@ -158,6 +158,45 @@ func RenderOpTables(w io.Writer, r *Report) {
 	}
 }
 
+// RenderProofTables prints the audit-proof breakdown, one block per proof scale.
+// It slots into the Table 2 family: the four proof operations with their latency
+// distribution, plus the proof sizes — the headline being that both verify time
+// and proof size stay ~log2(n) as the log grows.
+func RenderProofTables(w io.Writer, r *Report) {
+	p := newPalette(IsTTY(w))
+	for _, pr := range r.ProofScales {
+		fmt.Fprintf(w, "\n%sTable 2 — Audit proofs @ %s entries%s\n",
+			p.bold, FormatCount(int64(pr.TreeSize)), p.reset)
+		tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+		fmt.Fprintln(tw, "Operation\tCalls\tMedian\tMean\tp95\tTotal CPU")
+		for _, op := range pr.Ops {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				op.Name,
+				FormatCount(op.Calls),
+				FormatDuration(op.MedianNanos),
+				FormatDuration(op.MeanNanos),
+				FormatDuration(op.P95Nanos),
+				FormatDuration(op.TotalCPUNanos),
+			)
+		}
+		tw.Flush()
+		fmt.Fprintf(w, "  Inclusion proof:   %s   (log2 n = %.1f)\n",
+			formatProofSize(pr.InclusionSize), pr.InclusionSize.Log2N)
+		fmt.Fprintf(w, "  Consistency proof: %s   (log2 n = %.1f)\n",
+			formatProofSize(pr.ConsistencySize), pr.ConsistencySize.Log2N)
+	}
+}
+
+// formatProofSize renders a proof's hash count and byte size, noting the range
+// across sampled leaves/splits when it varies.
+func formatProofSize(s ProofSize) string {
+	base := fmt.Sprintf("%d hashes / %s", s.Hashes, FormatBytes(uint64(s.Bytes)))
+	if s.MinHashes != s.MaxHashes {
+		return fmt.Sprintf("%s (%d–%d across samples)", base, s.MinHashes, s.MaxHashes)
+	}
+	return base
+}
+
 // WriteJSON writes the full report as indented JSON.
 func WriteJSON(path string, r *Report) error {
 	f, err := os.Create(path)
@@ -203,6 +242,24 @@ func WriteCSV(path string, r *Report) error {
 				f2(s.BallotsPerSec), f2(s.CiphertextsPerSec),
 				strconv.FormatUint(s.PeakHeapBytes, 10),
 				strconv.FormatBool(s.Correct),
+			}
+			if err := cw.Write(row); err != nil {
+				return err
+			}
+		}
+	}
+	// Audit-proof operations. The scale-level pipeline columns do not apply, so
+	// they are left blank; "votes" carries the proof tree size. Proof sizes live
+	// in the JSON and table output, not the CSV, to keep the column shape stable.
+	for _, pr := range r.ProofScales {
+		for _, op := range pr.Ops {
+			row := []string{
+				strconv.Itoa(pr.TreeSize), "", op.Name,
+				strconv.FormatInt(op.Calls, 10),
+				f2(op.MedianNanos), f2(op.MeanNanos), f2(op.P95Nanos), f2(op.P99Nanos),
+				f2(op.MinNanos), f2(op.MaxNanos), f2(op.StdDevNanos),
+				f2(op.TotalCPUNanos), f2(op.PercentOfPipeline),
+				"", "", "", "", "", "",
 			}
 			if err := cw.Write(row); err != nil {
 				return err

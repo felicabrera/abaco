@@ -23,6 +23,7 @@ package merkle
 
 import (
 	"crypto/sha256"
+	"math/bits"
 )
 
 const (
@@ -293,6 +294,155 @@ func VerifyConsistency(m, n int, root1, root2 []byte, proof [][]byte) bool {
 		return false
 	}
 	return equalHash(oldRoot, root1) && equalHash(newRoot, root2)
+}
+
+// --- Stored tree (O(log n) proof generation) ---
+//
+// The reference InclusionProof/ConsistencyProof above recompute every sibling
+// subtree root from the raw leaf slice, so a single proof costs O(n) hashes.
+// That is fine as a correctness oracle but not as a model of a real log server,
+// which stores the tree and serves audit paths in O(log n). StoredTree keeps
+// every level of the tree so a proof reads a handful of stored nodes instead of
+// rehashing the log.
+//
+// The levels are the standard Certificate Transparency "left-full" form:
+// levels[0] is the leaf hashes; each higher level combines adjacent pairs with
+// nodeHash and carries a lone right node up unchanged. This reproduces RFC
+// 6962's recursive Merkle Tree Hash exactly (the equivalence Trillian and other
+// CT logs rely on), which the tests assert against the reference by byte-equality.
+
+// StoredTree materialises every level of the RFC 6962 tree over a fixed set of
+// leaf hashes. It is immutable once built.
+type StoredTree struct {
+	levels [][][]byte // levels[0] = leaves; levels[d] = nodes d up from the leaves
+	size   int
+}
+
+// NewStoredTree builds the level structure over the given leaf hashes in O(n)
+// hashes and O(n) memory. The caller's slice is not retained (the top level is
+// copied), though the leaf hash bytes are shared read-only.
+func NewStoredTree(leaves [][]byte) *StoredTree {
+	st := &StoredTree{size: len(leaves)}
+	if len(leaves) == 0 {
+		return st
+	}
+	level := make([][]byte, len(leaves))
+	copy(level, leaves)
+	st.levels = append(st.levels, level)
+	for len(level) > 1 {
+		next := make([][]byte, 0, (len(level)+1)/2)
+		for i := 0; i+1 < len(level); i += 2 {
+			next = append(next, nodeHash(level[i], level[i+1]))
+		}
+		if len(level)%2 == 1 {
+			next = append(next, level[len(level)-1]) // promote the lone right node
+		}
+		st.levels = append(st.levels, next)
+		level = next
+	}
+	return st
+}
+
+// Size reports the number of leaves.
+func (s *StoredTree) Size() int { return s.size }
+
+// Root returns the RFC 6962 tree head. It is the single node at the top level.
+func (s *StoredTree) Root() []byte {
+	if s.size == 0 {
+		return emptyRoot()
+	}
+	return s.levels[len(s.levels)-1][0]
+}
+
+// rangeRoot returns MTH(D[lo:hi]) for 0 <= lo < hi <= size, reading stored
+// perfect subtrees where the range is aligned and recursing only down the right
+// spine. It mirrors RFC 6962's recursive definition, so it is byte-identical to
+// rootFromLeafHashes(leaves[lo:hi]) but costs O(log n) rather than O(hi-lo).
+func (s *StoredTree) rangeRoot(lo, hi int) []byte {
+	n := hi - lo
+	if n == 1 {
+		return s.levels[0][lo]
+	}
+	// A power-of-two range aligned to its own size is a perfect subtree whose
+	// root is stored directly (its full leaf span fits within the tree, so it is
+	// never a promoted partial node).
+	if n&(n-1) == 0 && lo&(n-1) == 0 {
+		level := bits.TrailingZeros(uint(n))
+		return s.levels[level][lo>>level]
+	}
+	k := largestPowerOfTwoLessThan(n)
+	return nodeHash(s.rangeRoot(lo, lo+k), s.rangeRoot(lo+k, hi))
+}
+
+// PrefixRoot returns MTH(D[0:m]), the tree head the log had at size m — the "old
+// root" a consistency proof is checked against. O(log n).
+func (s *StoredTree) PrefixRoot(m int) []byte {
+	switch {
+	case m <= 0:
+		return emptyRoot()
+	case m >= s.size:
+		return s.Root()
+	default:
+		return s.rangeRoot(0, m)
+	}
+}
+
+// InclusionProof returns the audit path for the leaf at index m. It follows the
+// same recursion as the reference InclusionProof, so its output is byte-for-byte
+// identical, but reads sibling subtree roots from storage in O(log n).
+func (s *StoredTree) InclusionProof(m int) [][]byte {
+	var path [][]byte
+	var rec func(lo, hi, idx int)
+	rec = func(lo, hi, idx int) {
+		n := hi - lo
+		if n == 1 {
+			return
+		}
+		k := largestPowerOfTwoLessThan(n)
+		if idx < k {
+			rec(lo, lo+k, idx)
+			path = append(path, s.rangeRoot(lo+k, hi)) // right sibling
+		} else {
+			rec(lo+k, hi, idx-k)
+			path = append(path, s.rangeRoot(lo, lo+k)) // left sibling
+		}
+	}
+	if m < 0 || m >= s.size {
+		return nil
+	}
+	rec(0, s.size, m)
+	return path
+}
+
+// ConsistencyProof proves that the tree at size m is a prefix of this tree. It
+// follows the reference SUBPROOF recursion with stored range roots, so its
+// output matches ConsistencyProof(leaves, m) byte-for-byte in O(log n).
+func (s *StoredTree) ConsistencyProof(m int) [][]byte {
+	n := s.size
+	if m <= 0 || m >= n {
+		return nil
+	}
+	var proof [][]byte
+	var subproof func(lo, hi, m int, b bool)
+	subproof = func(lo, hi, m int, b bool) {
+		n := hi - lo
+		if m == n {
+			if !b {
+				proof = append(proof, s.rangeRoot(lo, hi))
+			}
+			return
+		}
+		k := largestPowerOfTwoLessThan(n)
+		if m <= k {
+			subproof(lo, lo+k, m, b)
+			proof = append(proof, s.rangeRoot(lo+k, hi)) // MTH(D[k:n])
+		} else {
+			subproof(lo+k, hi, m-k, false)
+			proof = append(proof, s.rangeRoot(lo, lo+k)) // MTH(D[0:k])
+		}
+	}
+	subproof(0, n, m, true)
+	return proof
 }
 
 func equalHash(a, b []byte) bool {
