@@ -192,6 +192,14 @@ $ ./abaco bench --votes 1000,10000,100000 --candidates 2 \
 
 Misma semilla ⇒ misma distribución de votos, mismos ciphertexts y mismo conteo verificado, en cualquier hardware. Los *tiempos* dependen de la máquina (ver [No-objetivos](#no-objetivos-y-limitaciones)); el `Environment` block y el JSON registran en cuál se corrió.
 
+## Seguimiento continuo (CI)
+
+Cada push a `main` dispara el workflow [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml), que corre el pipeline (`--proof-votes none`) y las pruebas de auditoría como dos invocaciones separadas, con **la misma semilla (42) y las mismas escalas (1k/10k/100k/1M)** en cada commit. Así los números del informe dejan de ser una foto puntual y pasan a ser una serie temporal comparable.
+
+Cada corrida: sube `pipeline.json` y `proofs.json` como artefactos (identificados por SHA), imprime las tablas legibles al log del job, y publica en el *job summary* un diff commit-a-commit de las medianas clave —Encrypt, Prove/Verify ballot y verify/tamaño de las pruebas de auditoría— contra el commit anterior de `main`. Un movimiento mayor a ±10% se marca con ⚠️, pero **no** rompe el build por defecto (el ruido de rendimiento no debe bloquear merges); fallar ante una regresión es opt-in vía la entrada `fail_on_regression` del `workflow_dispatch`. El diff se genera con `abaco benchdiff --old <base>.json --new <actual>.json`, y el baseline vive en la rama `bench-baseline`. Atajo local: `make bench-ci`.
+
+> El runner es de GitHub (compartido), así que los *números absolutos* son ruidosos; solo son confiables los deltas relativos grandes. Para cifras absolutas citables, correr en hardware fijo (ver [Metodología](#metodología-de-medición)).
+
 ## Límites de recursos duros (Docker)
 
 `--mem` usa `debug.SetMemoryLimit` (GOMEMLIMIT), que es un límite **blando**: presiona al GC, no es un cap duro. Para una simulación defendible de una máquina de 1 GB / 2 cores hay que correr bajo cgroups:

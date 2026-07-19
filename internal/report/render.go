@@ -209,6 +209,20 @@ func WriteJSON(path string, r *Report) error {
 	return enc.Encode(r)
 }
 
+// ReadJSON loads a report previously written by WriteJSON. It is the inverse of
+// WriteJSON, used by tools (e.g. benchdiff) that compare two runs.
+func ReadJSON(path string) (*Report, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var r Report
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return &r, nil
+}
+
 // WriteCSV writes a flat per-(scale, operation) CSV, convenient for spreadsheets
 // and plotting.
 func WriteCSV(path string, r *Report) error {
