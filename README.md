@@ -238,7 +238,7 @@ Incluye, entre otros: `Decrypt(Encrypt(m))==m`, homomorfismo, IND-CPA, **la ZKP 
 
 ## Cómo citarlo
 
-Ver [`CITATION.cff`](CITATION.cff). Autores: Felipe Cabrera, Stefano Francolino, Lucía Vázquez (Universidad Católica del Uruguay).
+Ver [`CITATION.cff`](CITATION.cff). Autor: Felipe Cabrera (Universidad Católica del Uruguay).
 
 ## Licencia
 

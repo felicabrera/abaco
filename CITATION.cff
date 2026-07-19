@@ -13,12 +13,6 @@ authors:
   - family-names: Cabrera
     given-names: Felipe
     affiliation: "Universidad Católica del Uruguay"
-  - family-names: Francolino
-    given-names: Stefano
-    affiliation: "Universidad Católica del Uruguay"
-  - family-names: Vázquez
-    given-names: Lucía
-    affiliation: "Universidad Católica del Uruguay"
 license: Apache-2.0
 repository-code: "https://github.com/felicabrera/abaco"
 keywords:
